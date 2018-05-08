@@ -178,7 +178,7 @@ def read(fname, lang=None):
             data.append(sent)
             sent = []
         else:
-            if not lang:
+            if lang == 'dev':
                 try:
                     w,p,l = line
                 except ValueError:
