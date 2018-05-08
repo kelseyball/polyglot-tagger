@@ -12,7 +12,7 @@ from collections import Counter, defaultdict
 
 import dynet as dy
 import numpy as np
-from gensim.models.word2vec import Word2Vec
+from gensim.models.word2vec import KeyedVectors
 
 class Meta:
     def __init__(self):
@@ -48,56 +48,38 @@ class POSTagger():
         self.B2 = self.model.add_parameters(self.meta.n_tags)
 
         # word-level LSTMs
-        self.fwdRNN = dy.LSTMBuilder(1, self.meta.w_dim_eng+self.meta.lstm_char_dim*2, self.meta.lstm_word_dim, self.model) 
-        self.bwdRNN = dy.LSTMBuilder(1, self.meta.w_dim_eng+self.meta.lstm_char_dim*2, self.meta.lstm_word_dim, self.model)
-        self.fwdRNN2 = dy.LSTMBuilder(1, self.meta.lstm_word_dim*2, self.meta.lstm_word_dim, self.model) 
-        self.bwdRNN2 = dy.LSTMBuilder(1, self.meta.lstm_word_dim*2, self.meta.lstm_word_dim, self.model)
+        self.fwdRNN = dy.LSTMBuilder(1, self.meta.lstm_word_dim, self.meta.lstm_word_dim, self.model) 
+        self.bwdRNN = dy.LSTMBuilder(1, self.meta.lstm_word_dim, self.meta.lstm_word_dim, self.model)
 
         # char-level LSTMs
-        self.ecfwdRNN = dy.LSTMBuilder(1, self.meta.c_dim, self.meta.lstm_char_dim, self.model)
-        self.ecbwdRNN = dy.LSTMBuilder(1, self.meta.c_dim, self.meta.lstm_char_dim, self.model)
-        self.hcfwdRNN = dy.LSTMBuilder(1, self.meta.c_dim, self.meta.lstm_char_dim, self.model)
-        self.hcbwdRNN = dy.LSTMBuilder(1, self.meta.c_dim, self.meta.lstm_char_dim, self.model)
+        self.cfwdRNN = dy.LSTMBuilder(1, self.meta.c_dim, self.meta.lstm_word_dim/2, self.model)
+        self.cbwdRNN = dy.LSTMBuilder(1, self.meta.c_dim, self.meta.lstm_word_dim/2, self.model)
         if model:
             self.model.populate('%s.dy' %model)
 
-    def word_rep(self, word, lang='en'):
+    def word_rep(self, word, lang='en', f, b):
         if not self.eval and random.random() < 0.25:
             return self.HWORDS_LOOKUP[0] if lang=='hi' else self.EWORDS_LOOKUP[0]
         if lang == 'hi':
             idx = self.meta.hw2i.get(word, 0)
+            if not idx:
+                return char_rep(word)
             return self.HWORDS_LOOKUP[idx]
         elif lang == 'en':
             idx = self.meta.ew2i.get(word, self.meta.ew2i.get(word.lower(), 0))
+            if not idx:
+                return char_rep(word)
             return self.EWORDS_LOOKUP[idx]
     
-    def char_rep_hin(self, w, f, b):
-        no_c_drop = False
+    def char_rep(self, word, hf, hb, ef, eb, lang='en'):
         if self.eval or random.random()<0.9:
             no_c_drop = True
         bos, eos, unk = self.meta.hc2i["bos"], self.meta.hc2i["eos"], self.meta.hc2i["unk"]
-        char_ids = [bos] + [self.meta.hc2i.get(c, unk) if no_c_drop else unk for c in w] + [eos]
+        char_ids = [bos] + [self.meta.c2i.get(c, unk) if no_c_drop else unk for c in w] + [eos]
         char_embs = [self.HCHARS_LOOKUP[cid] for cid in char_ids]
         fw_exps = f.transduce(char_embs)
         bw_exps = b.transduce(reversed(char_embs))
         return dy.concatenate([ fw_exps[-1], bw_exps[-1] ])
-    
-    def char_rep_eng(self, w, f, b):
-        no_c_drop = False
-        if self.eval or random.random()<0.9:
-            no_c_drop = True
-        bos, eos, unk = self.meta.ec2i["bos"], self.meta.ec2i["eos"], self.meta.ec2i["unk"]
-        char_ids = [bos] + [self.meta.ec2i.get(c, unk) if no_c_drop else unk for c in w] + [eos]
-        char_embs = [self.ECHARS_LOOKUP[cid] for cid in char_ids]
-        fw_exps = f.transduce(char_embs)
-        bw_exps = b.transduce(reversed(char_embs))
-        return dy.concatenate([ fw_exps[-1], bw_exps[-1] ])
-
-    def char_rep(self, word, hf, hb, ef, eb, lang='en'):
-        if lang == 'hi':
-            return self.char_rep_hin(word, hf, hb)
-        elif lang == 'en':
-            return self.char_rep_eng(word, ef, eb)
 
     def enable_dropout(self):
         self.fwdRNN.set_dropout(0.3)
@@ -137,8 +119,6 @@ class POSTagger():
         # initialize the RNNs
         f_init = self.fwdRNN.initial_state()
         b_init = self.bwdRNN.initial_state()
-        f2_init = self.fwdRNN2.initial_state()
-        b2_init = self.bwdRNN2.initial_state()
     
         self.hcf_init = self.hcfwdRNN.initial_state()
         self.hcb_init = self.hcbwdRNN.initial_state()
@@ -150,20 +130,10 @@ class POSTagger():
         wembs = [self.word_rep(w, l) for w,l in zip(words, ltags)]
         #if not self.eval:
         #    wembs = [dy.block_dropout(x, 0.25) for x in wembs]
-        cembs = [self.char_rep(w, self.hcf_init, self.hcb_init,
-                               self.ecf_init, self.ecb_init, l) for w,l in zip(words, ltags)]
-        xembs = [dy.concatenate([w, c]) for w,c in zip(wembs, cembs)]
     
         # feed word vectors into biLSTM
-        fw_exps = f_init.transduce(xembs)
-        bw_exps = b_init.transduce(reversed(xembs))
-    
-        # biLSTM states
-        bi_exps = [dy.concatenate([f,b]) for f,b in zip(fw_exps, reversed(bw_exps))]
-
-        # feed word vectors into biLSTM
-        fw_exps = f2_init.transduce(bi_exps)
-        bw_exps = b2_init.transduce(reversed(bi_exps))
+        fw_exps = f_init.transduce(wembs)
+        bw_exps = b_init.transduce(reversed(wembs))
     
         # biLSTM states
         bi_exps = [dy.concatenate([f,b]) for f,b in zip(fw_exps, reversed(bw_exps))]
@@ -200,6 +170,7 @@ def read(fname, lang=None):
     data = []
     sent = []
     pid = 3 if args.ud else 4
+    wid = 1 if lang =='dev' and not args.norm else 2
     fp = io.open(fname, encoding='utf-8')
     for i,line in enumerate(fp):
         line = line.split()
@@ -212,7 +183,7 @@ def read(fname, lang=None):
                     w,p,l = line
                 except ValueError:
                     try:
-                        w,p,l = line[2], line[pid], line[8]
+                        w,p,l = line[wid], line[pid], line[8]
                     except Exception:
                         sys.stderr.write('Wrong file format\n')
                         sys.exit(1)
@@ -296,25 +267,16 @@ def train_tagger(train):
 
 def get_char_map(data):
     tags = set()
-    meta.hc2i, meta.ec2i = [{'bos':0, 'eos':1, 'unk':2}]*2
-    hcid, ecid = len(meta.hc2i), len(meta.ec2i)
+    meta.c2i = [{'bos':0, 'eos':1, 'unk':2}]
+    cid = len(meta.c2i)
     for sent in data:
         for w,p,l in sent:
             tags.add(p)
             for c in w:
-                if l == 'en':
-                    if not meta.ec2i.has_key(c):
-                        meta.ec2i[c] = ecid
-                        ecid += 1
-                elif l == 'hi':
-                    if not meta.hc2i.has_key(c):
-                        meta.hc2i[c] = hcid
-                        hcid += 1
-                else:
-                    sys.stderr.write('Language Error! \n')
-                    exit()
-    meta.n_chars_eng = len(meta.ec2i)
-    meta.n_chars_hin = len(meta.hc2i)
+                if not meta.ec2i.has_key(c):
+                    meta.c2i[c] = cid
+                    cid += 1
+    meta.n_chars = len(meta.c2i)
     meta.n_tags = len(tags)
     meta.i2t = dict(enumerate(tags))
     meta.t2i = {t:i for i,t in meta.i2t.items()}
@@ -344,6 +306,7 @@ if __name__ == '__main__':
     parser.add_argument('--ud', type=int, default=1, help='1 if UD treebank else 0')
     parser.add_argument('--iter', type=int, default=100, help='No. of Epochs')
     parser.add_argument('--bvec', type=int, help='1 if binary embedding file else 0')
+    parser.add_argument('--norm', action='store_true', help='set if testing on normalized word forms (3rd column in UD format)')
     group.add_argument('--save-model', dest='save_model', help='Specify path to save model')
     group.add_argument('--load-model', dest='load_model', help='Load Pretrained Model')
     args = parser.parse_args()
@@ -356,12 +319,12 @@ if __name__ == '__main__':
     if args.hdev:
         hdev = read(args.hdev, lang='hi')
     if args.cdev:
-        cdev = read(args.cdev)
+        cdev = read(args.cdev, 'dev')
     if not args.load_model: 
         train_e = read(args.etrain, 'en')
         train_h = read(args.htrain, 'hi')
-        ewvm = Word2Vec.load_word2vec_format(args.eembd, binary=args.bvec, limit=args.elimit)
-        hwvm = Word2Vec.load_word2vec_format(args.hembd, binary=args.bvec, limit=args.hlimit)
+        ewvm = KeyedVectors.load_word2vec_format(args.eembd, binary=args.bvec, limit=args.elimit)
+        hwvm = KeyedVectors.load_word2vec_format(args.hembd, binary=args.bvec, limit=args.hlimit)
         meta.w_dim_eng = ewvm.syn0.shape[1]
         meta.n_words_eng = ewvm.syn0.shape[0]+meta.add_words
         meta.w_dim_hin = hwvm.syn0.shape[1]
