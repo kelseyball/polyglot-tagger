@@ -203,12 +203,13 @@ def read(fname, lang=None):
     wid = 1 if lang =='dev' and not args.norm else 2
     fp = io.open(fname, encoding='utf-8')
     for i,line in enumerate(fp):
+        if line.startswith('#'): continue
         line = line.split()
         if not line:
             data.append(sent)
             sent = []
         else:
-            if not lang:
+            if lang == 'dev':
                 try:
                     w,p,l = line
                 except ValueError:
@@ -358,7 +359,7 @@ if __name__ == '__main__':
     if args.hdev:
         hdev = read(args.hdev, lang='hi')
     if args.cdev:
-        cdev = read(args.cdev, 'dev')
+        cdev = read(args.cdev, lang='dev')
     if not args.load_model: 
         train_e = read(args.etrain, 'en')
         train_h = read(args.htrain, 'hi')
