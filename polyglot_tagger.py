@@ -19,8 +19,8 @@ class Meta:
         self.c_dim = 32  # character-rnn input dimension
         self.add_words = 1  # additional lookup for missing/special words
         self.n_hidden = 64  # pos-mlp hidden layer dimension
-        self.lstm_char_dim = 64  # char-LSTM output dimension
-        self.lstm_word_dim = 128  # LSTM (word-char concatenated input) output dimension
+        self.lstm_char_dim = 32  # char-LSTM output dimension
+        self.lstm_word_dim = 64  # LSTM (word-char concatenated input) output dimension
 
 
 class POSTagger():
@@ -50,8 +50,8 @@ class POSTagger():
         # word-level LSTMs
         self.fwdRNN = dy.LSTMBuilder(1, self.meta.w_dim_eng+self.meta.lstm_char_dim*2, self.meta.lstm_word_dim, self.model) 
         self.bwdRNN = dy.LSTMBuilder(1, self.meta.w_dim_eng+self.meta.lstm_char_dim*2, self.meta.lstm_word_dim, self.model)
-        self.fwdRNN2 = dy.LSTMBuilder(1, self.meta.lstm_word_dim*2, self.meta.lstm_word_dim, self.model) 
-        self.bwdRNN2 = dy.LSTMBuilder(1, self.meta.lstm_word_dim*2, self.meta.lstm_word_dim, self.model)
+        # self.fwdRNN2 = dy.LSTMBuilder(1, self.meta.lstm_word_dim*2, self.meta.lstm_word_dim, self.model) 
+        # self.bwdRNN2 = dy.LSTMBuilder(1, self.meta.lstm_word_dim*2, self.meta.lstm_word_dim, self.model)
 
         # char-level LSTMs
         self.ecfwdRNN = dy.LSTMBuilder(1, self.meta.c_dim, self.meta.lstm_char_dim, self.model)
@@ -61,15 +61,28 @@ class POSTagger():
         if model:
             self.model.populate('%s.dy' %model)
 
-    def word_rep(self, word, lang='en'):
+    def word_rep(self, word, lang='en', guess_language=None):
         if not self.eval and random.random() < 0.25:
             return self.HWORDS_LOOKUP[0] if lang=='hi' else self.EWORDS_LOOKUP[0]
-        if lang == 'hi':
-            idx = self.meta.hw2i.get(word, 0)
-            return self.HWORDS_LOOKUP[idx]
-        elif lang == 'en':
-            idx = self.meta.ew2i.get(word, self.meta.ew2i.get(word.lower(), 0))
-            return self.EWORDS_LOOKUP[idx]
+        hidx = self.meta.hw2i.get(word, self.meta.hw2i.get(word.lower(), 0))
+        hrep = self.HWORDS_LOOKUP[hidx]
+        eidx = self.meta.ew2i.get(word, self.meta.ew2i.get(word.lower(), 0))
+        erep = self.EWORDS_LOOKUP[eidx]
+        if guess_language is None:
+            if lang == 'hi': return hrep
+            elif lang == 'en': return erep
+        else:
+            # OOV for both embedding spaces, or present in both spaces --> pick either with equal probability
+            if (hidx == 0 and eidx == 0) or (hidx != 0 and eidx != 0):
+                if guess_language == 'en':
+                    return erep
+                else:
+                    return hrep
+            elif hidx != 0:
+                return hrep
+            elif eidx != 0:
+                return erep
+
     
     def char_rep_hin(self, w, f, b):
         no_c_drop = False
@@ -93,17 +106,23 @@ class POSTagger():
         bw_exps = b.transduce(reversed(char_embs))
         return dy.concatenate([ fw_exps[-1], bw_exps[-1] ])
 
-    def char_rep(self, word, hf, hb, ef, eb, lang='en'):
-        if lang == 'hi':
-            return self.char_rep_hin(word, hf, hb)
-        elif lang == 'en':
-            return self.char_rep_eng(word, ef, eb)
+    def char_rep(self, word, hf, hb, ef, eb, lang='en', guess_language=None):
+        hrep = self.char_rep_hin(word, hf, hb)
+        erep = self.char_rep_eng(word, ef, eb)
+        if guess_language == None:
+            if lang == 'hi': return hrep
+            elif lang == 'en': return erep
+        else:
+            if guess_language == 'en':
+                return erep
+            else:
+                return hrep
 
     def enable_dropout(self):
         self.fwdRNN.set_dropout(0.3)
         self.bwdRNN.set_dropout(0.3)
-        self.fwdRNN2.set_dropout(0.3)
-        self.bwdRNN2.set_dropout(0.3)
+        # self.fwdRNN2.set_dropout(0.3)
+        # self.bwdRNN2.set_dropout(0.3)
         self.ecfwdRNN.set_dropout(0.3)
         self.ecbwdRNN.set_dropout(0.3)
         self.hcfwdRNN.set_dropout(0.3)
@@ -114,14 +133,14 @@ class POSTagger():
     def disable_dropout(self):
         self.fwdRNN.disable_dropout()
         self.bwdRNN.disable_dropout()
-        self.fwdRNN2.disable_dropout()
-        self.bwdRNN2.disable_dropout()
+        # self.fwdRNN2.disable_dropout()
+        # self.bwdRNN2.disable_dropout()
         self.ecfwdRNN.disable_dropout()
         self.ecbwdRNN.disable_dropout()
         self.hcfwdRNN.disable_dropout()
         self.hcbwdRNN.disable_dropout()
 
-    def build_tagging_graph(self, words, ltags):
+    def build_tagging_graph(self, words, ltags, use_ltags=True):
         # parameters -> expressions
         self.w1 = dy.parameter(self.W1)
         self.b1 = dy.parameter(self.B1)
@@ -137,8 +156,8 @@ class POSTagger():
         # initialize the RNNs
         f_init = self.fwdRNN.initial_state()
         b_init = self.bwdRNN.initial_state()
-        f2_init = self.fwdRNN2.initial_state()
-        b2_init = self.bwdRNN2.initial_state()
+        # f2_init = self.fwdRNN2.initial_state()
+        # b2_init = self.bwdRNN2.initial_state()
     
         self.hcf_init = self.hcfwdRNN.initial_state()
         self.hcb_init = self.hcbwdRNN.initial_state()
@@ -146,12 +165,20 @@ class POSTagger():
         self.ecf_init = self.ecfwdRNN.initial_state()
         self.ecb_init = self.ecbwdRNN.initial_state()
 
+        # At test time, if the word is OOV or present in both embedding spaces, pick one to use randomly.
+        # TODO: use language labels to predict this
+        guess_language = None
+        if use_ltags is False:
+            guess_language = 'en'
+            if random.random() < 0.5:
+                guess_language = 'hi'
+
         # get the word vectors. word_rep(...) returns a 128-dim vector expression for each word.
-        wembs = [self.word_rep(w, l) for w,l in zip(words, ltags)]
+        wembs = [self.word_rep(w, l, guess_language) for w,l in zip(words, ltags)]
         #if not self.eval:
         #    wembs = [dy.block_dropout(x, 0.25) for x in wembs]
         cembs = [self.char_rep(w, self.hcf_init, self.hcb_init,
-                               self.ecf_init, self.ecb_init, l) for w,l in zip(words, ltags)]
+                               self.ecf_init, self.ecb_init, l, guess_language) for w,l in zip(words, ltags)]
         xembs = [dy.concatenate([w, c]) for w,c in zip(wembs, cembs)]
     
         # feed word vectors into biLSTM
@@ -162,11 +189,11 @@ class POSTagger():
         bi_exps = [dy.concatenate([f,b]) for f,b in zip(fw_exps, reversed(bw_exps))]
 
         # feed word vectors into biLSTM
-        fw_exps = f2_init.transduce(bi_exps)
-        bw_exps = b2_init.transduce(reversed(bi_exps))
+        # fw_exps = f2_init.transduce(bi_exps)
+        # bw_exps = b2_init.transduce(reversed(bi_exps))
     
-        # biLSTM states
-        bi_exps = [dy.concatenate([f,b]) for f,b in zip(fw_exps, reversed(bw_exps))]
+        # # biLSTM states
+        # bi_exps = [dy.concatenate([f,b]) for f,b in zip(fw_exps, reversed(bw_exps))]
     
         # feed each biLSTM state to an MLP
         exps = []
@@ -178,7 +205,7 @@ class POSTagger():
     
     def sent_loss(self, words, tags, ltags):
         self.eval = False
-        vecs = self.build_tagging_graph(words, ltags)
+        vecs = self.build_tagging_graph(words, ltags, use_ltags=True)
         for v,t in zip(vecs,tags):
             tid = self.meta.t2i[t]
             err = dy.pickneglogsoftmax(v, tid)
@@ -187,7 +214,7 @@ class POSTagger():
     def tag_sent(self, words, ltags):
         self.eval = True
         dy.renew_cg()
-        vecs = self.build_tagging_graph(words, ltags)
+        vecs = self.build_tagging_graph(words, ltags, use_ltags=False)
         vecs = [dy.softmax(v) for v in vecs]
         probs = [v.npvalue() for v in vecs]
         tags = []
