@@ -12,7 +12,7 @@ from collections import Counter, defaultdict
 
 import dynet as dy
 import numpy as np
-from gensim.models.word2vec import Word2Vec
+from gensim.models.word2vec import KeyedVectors
 
 class Meta:
     def __init__(self):
@@ -200,6 +200,7 @@ def read(fname, lang=None):
     data = []
     sent = []
     pid = 3 if args.ud else 4
+    wid = 1 if lang =='dev' and not args.norm else 2
     fp = io.open(fname, encoding='utf-8')
     for i,line in enumerate(fp):
         line = line.split()
@@ -212,7 +213,7 @@ def read(fname, lang=None):
                     w,p,l = line
                 except ValueError:
                     try:
-                        w,p,l = line[2], line[pid], line[8]
+                        w,p,l = line[wid], line[pid], line[8]
                     except Exception:
                         sys.stderr.write('Wrong file format\n')
                         sys.exit(1)
@@ -344,6 +345,7 @@ if __name__ == '__main__':
     parser.add_argument('--ud', type=int, default=1, help='1 if UD treebank else 0')
     parser.add_argument('--iter', type=int, default=100, help='No. of Epochs')
     parser.add_argument('--bvec', type=int, help='1 if binary embedding file else 0')
+    parser.add_argument('--norm', action='store_true', help='set if testing on normalized word forms (3rd column in UD format)')
     group.add_argument('--save-model', dest='save_model', help='Specify path to save model')
     group.add_argument('--load-model', dest='load_model', help='Load Pretrained Model')
     args = parser.parse_args()
@@ -356,12 +358,12 @@ if __name__ == '__main__':
     if args.hdev:
         hdev = read(args.hdev, lang='hi')
     if args.cdev:
-        cdev = read(args.cdev)
+        cdev = read(args.cdev, 'dev')
     if not args.load_model: 
         train_e = read(args.etrain, 'en')
         train_h = read(args.htrain, 'hi')
-        ewvm = Word2Vec.load_word2vec_format(args.eembd, binary=args.bvec, limit=args.elimit)
-        hwvm = Word2Vec.load_word2vec_format(args.hembd, binary=args.bvec, limit=args.hlimit)
+        ewvm = KeyedVectors.load_word2vec_format(args.eembd, binary=args.bvec, limit=args.elimit)
+        hwvm = KeyedVectors.load_word2vec_format(args.hembd, binary=args.bvec, limit=args.hlimit)
         meta.w_dim_eng = ewvm.syn0.shape[1]
         meta.n_words_eng = ewvm.syn0.shape[0]+meta.add_words
         meta.w_dim_hin = hwvm.syn0.shape[1]
