@@ -50,8 +50,6 @@ class POSTagger():
         # word-level LSTMs
         self.fwdRNN = dy.LSTMBuilder(1, self.meta.w_dim_eng+self.meta.lstm_char_dim*2, self.meta.lstm_word_dim, self.model) 
         self.bwdRNN = dy.LSTMBuilder(1, self.meta.w_dim_eng+self.meta.lstm_char_dim*2, self.meta.lstm_word_dim, self.model)
-        # self.fwdRNN2 = dy.LSTMBuilder(1, self.meta.lstm_word_dim*2, self.meta.lstm_word_dim, self.model) 
-        # self.bwdRNN2 = dy.LSTMBuilder(1, self.meta.lstm_word_dim*2, self.meta.lstm_word_dim, self.model)
 
         # char-level LSTMs
         self.ecfwdRNN = dy.LSTMBuilder(1, self.meta.c_dim, self.meta.lstm_char_dim, self.model)
@@ -74,16 +72,18 @@ class POSTagger():
         else:
             # OOV for both embedding spaces, or present in both spaces --> pick either with equal probability
             if (hidx == 0 and eidx == 0) or (hidx != 0 and eidx != 0):
+                # print("both OOV: ", word)
                 if guess_language == 'en':
                     return erep
-                else:
+                elif guess_language == 'hi':
                     return hrep
             elif hidx != 0:
+                # print("found Hindi rep: ", word)
                 return hrep
             elif eidx != 0:
+                # print("found English rep: ", word)
                 return erep
 
-    
     def char_rep_hin(self, w, f, b):
         no_c_drop = False
         if self.eval or random.random()<0.9:
@@ -109,20 +109,18 @@ class POSTagger():
     def char_rep(self, word, hf, hb, ef, eb, lang='en', guess_language=None):
         hrep = self.char_rep_hin(word, hf, hb)
         erep = self.char_rep_eng(word, ef, eb)
-        if guess_language == None:
+        if guess_language is None:
             if lang == 'hi': return hrep
             elif lang == 'en': return erep
         else:
             if guess_language == 'en':
                 return erep
-            else:
+            elif guess_language == 'hi':
                 return hrep
 
     def enable_dropout(self):
         self.fwdRNN.set_dropout(0.3)
         self.bwdRNN.set_dropout(0.3)
-        # self.fwdRNN2.set_dropout(0.3)
-        # self.bwdRNN2.set_dropout(0.3)
         self.ecfwdRNN.set_dropout(0.3)
         self.ecbwdRNN.set_dropout(0.3)
         self.hcfwdRNN.set_dropout(0.3)
@@ -133,8 +131,6 @@ class POSTagger():
     def disable_dropout(self):
         self.fwdRNN.disable_dropout()
         self.bwdRNN.disable_dropout()
-        # self.fwdRNN2.disable_dropout()
-        # self.bwdRNN2.disable_dropout()
         self.ecfwdRNN.disable_dropout()
         self.ecbwdRNN.disable_dropout()
         self.hcfwdRNN.disable_dropout()
@@ -156,8 +152,6 @@ class POSTagger():
         # initialize the RNNs
         f_init = self.fwdRNN.initial_state()
         b_init = self.bwdRNN.initial_state()
-        # f2_init = self.fwdRNN2.initial_state()
-        # b2_init = self.bwdRNN2.initial_state()
     
         self.hcf_init = self.hcfwdRNN.initial_state()
         self.hcb_init = self.hcbwdRNN.initial_state()
@@ -165,21 +159,29 @@ class POSTagger():
         self.ecf_init = self.ecfwdRNN.initial_state()
         self.ecb_init = self.ecbwdRNN.initial_state()
 
-        # At test time, if the word is OOV or present in both embedding spaces, pick one to use randomly.
-        # TODO: use language labels to predict this
-        guess_language = None
+        # If not using language labels, choose random language in the case of homonyms and OOV
         if use_ltags is False:
-            guess_language = 'en'
-            if random.random() < 0.5:
-                guess_language = 'hi'
-
-        # get the word vectors. word_rep(...) returns a 128-dim vector expression for each word.
-        wembs = [self.word_rep(w, l, guess_language) for w,l in zip(words, ltags)]
-        #if not self.eval:
-        #    wembs = [dy.block_dropout(x, 0.25) for x in wembs]
-        cembs = [self.char_rep(w, self.hcf_init, self.hcb_init,
-                               self.ecf_init, self.ecb_init, l, guess_language) for w,l in zip(words, ltags)]
-        xembs = [dy.concatenate([w, c]) for w,c in zip(wembs, cembs)]
+            wembs = []
+            cembs = []
+            for w,l in zip(words,ltags):
+                guess_language = None
+                if use_ltags is False:
+                    guess_language = 'en'
+                    if random.random() < 0.5:
+                        guess_language = 'hi'
+                wembs.append(self.word_rep(w,l,guess_language))
+                cembs.append(self.char_rep(w,self.hcf_init, self.hcb_init, self.ecf_init, self.ecb_init, l,guess_language))
+            xembs = [dy.concatenate([w, c]) for w,c in zip(wembs, cembs)]
+    
+        # Otherwise use language labels
+        else:
+            # get the word vectors. word_rep(...) returns a 128-dim vector expression for each word.
+            wembs = [self.word_rep(w, l, guess_language=None) for w,l in zip(words, ltags)]
+            #if not self.eval:
+            #    wembs = [dy.block_dropout(x, 0.25) for x in wembs]
+            cembs = [self.char_rep(w, self.hcf_init, self.hcb_init,
+                                   self.ecf_init, self.ecb_init, l, guess_language=None) for w,l in zip(words, ltags)]
+            xembs = [dy.concatenate([w, c]) for w,c in zip(wembs, cembs)]
     
         # feed word vectors into biLSTM
         fw_exps = f_init.transduce(xembs)
@@ -187,13 +189,6 @@ class POSTagger():
     
         # biLSTM states
         bi_exps = [dy.concatenate([f,b]) for f,b in zip(fw_exps, reversed(bw_exps))]
-
-        # feed word vectors into biLSTM
-        # fw_exps = f2_init.transduce(bi_exps)
-        # bw_exps = b2_init.transduce(reversed(bi_exps))
-    
-        # # biLSTM states
-        # bi_exps = [dy.concatenate([f,b]) for f,b in zip(fw_exps, reversed(bw_exps))]
     
         # feed each biLSTM state to an MLP
         exps = []
@@ -211,10 +206,11 @@ class POSTagger():
             err = dy.pickneglogsoftmax(v, tid)
             self.loss.append(err)
     
-    def tag_sent(self, words, ltags):
+    def tag_sent(self, words, ltags, use_ltags):
         self.eval = True
         dy.renew_cg()
-        vecs = self.build_tagging_graph(words, ltags, use_ltags=False)
+        # If using dev file with language predictions or gold labels, use_ltags is true, otherwise use lookup/random backoff 
+        vecs = self.build_tagging_graph(words, ltags, use_ltags)
         vecs = [dy.softmax(v) for v in vecs]
         probs = [v.npvalue() for v in vecs]
         tags = []
@@ -266,7 +262,7 @@ def eval(dev, ofp=None):
     gall, pall = [], []
     for sent in dev:
         words, golds, ltags = zip(*sent)
-        tags = [t for w,t in tagger.tag_sent(words, ltags)]
+        tags = [t for w,t in tagger.tag_sent(words, ltags, args.use_ltags)]
         #pall.extend(tags)
         if list(tags) == list(golds): good_sent += 1
         else: bad_sent += 1
@@ -374,6 +370,7 @@ if __name__ == '__main__':
     parser.add_argument('--iter', type=int, default=100, help='No. of Epochs')
     parser.add_argument('--bvec', type=int, help='1 if binary embedding file else 0')
     parser.add_argument('--norm', action='store_true', help='set if testing on normalized word forms (3rd column in UD format)')
+    parser.add_argument('--use-ltags', action='store_true', help='set if testing with gold or one-best predicted language labels')
     group.add_argument('--save-model', dest='save_model', help='Specify path to save model')
     group.add_argument('--load-model', dest='load_model', help='Load Pretrained Model')
     args = parser.parse_args()
