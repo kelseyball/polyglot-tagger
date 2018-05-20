@@ -35,7 +35,7 @@ trn = Transliterator(source='eng', target='hin', build_lookup=True)
 # homonyms_list = []
 
 def is_lang_dist(dist_string):
-    return dist_string.contains(':')
+    return ":" in dist_string
 
 def get_lang_dist(dist_string):
     dist = dict()
@@ -69,8 +69,7 @@ class POSTagger():
             for word, V in hwvm.vocab.iteritems():
                 self.HWORDS_LOOKUP.init_row(V.index+self.meta.add_words, hwvm.syn0[V.index])
 
-        self.ECHARS_LOOKUP = self.model.add_lookup_parameters((self.meta.n_chars_eng, self.meta.c_dim))
-        self.HCHARS_LOOKUP = self.model.add_lookup_parameters((self.meta.n_chars_hin, self.meta.c_dim))
+        self.CHARS_LOOKUP = self.model.add_lookup_parameters((self.meta.n_chars, self.meta.c_dim))
 
         # MLP on top of biLSTM outputs 100 -> 32 -> ntags
         self.W1 = self.model.add_parameters((self.meta.n_hidden, self.meta.lstm_word_dim*2))
@@ -83,10 +82,8 @@ class POSTagger():
         self.bwdRNN = dy.LSTMBuilder(1, self.meta.w_dim_eng+self.meta.lstm_char_dim*2, self.meta.lstm_word_dim, self.model)
 
         # char-level LSTMs
-        self.ecfwdRNN = dy.LSTMBuilder(1, self.meta.c_dim, self.meta.lstm_char_dim, self.model)
-        self.ecbwdRNN = dy.LSTMBuilder(1, self.meta.c_dim, self.meta.lstm_char_dim, self.model)
-        self.hcfwdRNN = dy.LSTMBuilder(1, self.meta.c_dim, self.meta.lstm_char_dim, self.model)
-        self.hcbwdRNN = dy.LSTMBuilder(1, self.meta.c_dim, self.meta.lstm_char_dim, self.model)
+        self.cfwdRNN = dy.LSTMBuilder(1, self.meta.c_dim, self.meta.lstm_char_dim, self.model)
+        self.cbwdRNN = dy.LSTMBuilder(1, self.meta.c_dim, self.meta.lstm_char_dim, self.model)
         if model:
             self.model.populate('%s.dy' %model)
 
@@ -112,9 +109,9 @@ class POSTagger():
         no_c_drop = False
         if self.eval or random.random()<0.9:
             no_c_drop = True
-        bos, eos, unk = self.meta.ec2i["bos"], self.meta.ec2i["eos"], self.meta.ec2i["unk"]
-        char_ids = [bos] + [self.meta.ec2i.get(c, unk) if no_c_drop else unk for c in w] + [eos]
-        char_embs = [self.ECHARS_LOOKUP[cid] for cid in char_ids]
+        bos, eos, unk = self.meta.c2i["bos"], self.meta.c2i["eos"], self.meta.c2i["unk"]
+        char_ids = [bos] + [self.meta.c2i.get(c, unk) if no_c_drop else unk for c in w] + [eos]
+        char_embs = [self.CHARS_LOOKUP[cid] for cid in char_ids]
         fw_exps = f.transduce(char_embs)
         bw_exps = b.transduce(reversed(char_embs))
         return dy.concatenate([ fw_exps[-1], bw_exps[-1] ])
@@ -123,20 +120,16 @@ class POSTagger():
     def enable_dropout(self):
         self.fwdRNN.set_dropout(0.3)
         self.bwdRNN.set_dropout(0.3)
-        self.ecfwdRNN.set_dropout(0.3)
-        self.ecbwdRNN.set_dropout(0.3)
-        self.hcfwdRNN.set_dropout(0.3)
-        self.hcbwdRNN.set_dropout(0.3)
+        self.cfwdRNN.set_dropout(0.3)
+        self.cbwdRNN.set_dropout(0.3)
         self.w1 = dy.dropout(self.w1, 0.3)
         self.b1 = dy.dropout(self.b1, 0.3)
 
     def disable_dropout(self):
         self.fwdRNN.disable_dropout()
         self.bwdRNN.disable_dropout()
-        self.ecfwdRNN.disable_dropout()
-        self.ecbwdRNN.disable_dropout()
-        self.hcfwdRNN.disable_dropout()
-        self.hcbwdRNN.disable_dropout()
+        self.cfwdRNN.disable_dropout()
+        self.cbwdRNN.disable_dropout()
 
     def build_tagging_graph(self, words, ltags):
         # parameters -> expressions
@@ -155,18 +148,14 @@ class POSTagger():
         f_init = self.fwdRNN.initial_state()
         b_init = self.bwdRNN.initial_state()
     
-        self.hcf_init = self.hcfwdRNN.initial_state()
-        self.hcb_init = self.hcbwdRNN.initial_state()
-    
-        self.ecf_init = self.ecfwdRNN.initial_state()
-        self.ecb_init = self.ecbwdRNN.initial_state()
+        self.cf_init = self.cfwdRNN.initial_state()
+        self.cb_init = self.cbwdRNN.initial_state()
 
         # get the word vectors. word_rep(...) returns a 128-dim vector expression for each word.
         wembs = [self.word_rep(w, l) for w,l in zip(words, ltags)]
         #if not self.eval:
         #    wembs = [dy.block_dropout(x, 0.25) for x in wembs]
-        cembs = [self.char_rep(w, self.hcf_init, self.hcb_init,
-                               self.ecf_init, self.ecb_init, l) for w,l in zip(words, ltags)]
+        cembs = [self.char_rep(w, self.cf_init, self.cb_init,) for w,l in zip(words, ltags)]
         xembs = [dy.concatenate([w, c]) for w,c in zip(wembs, cembs)]
 
         # feed word vectors into biLSTM
@@ -313,25 +302,16 @@ def train_tagger(train):
 
 def get_char_map(data):
     tags = set()
-    meta.hc2i, meta.ec2i = [{'bos':0, 'eos':1, 'unk':2}]*2
-    hcid, ecid = len(meta.hc2i), len(meta.ec2i)
+    meta.c2i = {'bos':0, 'eos':1, 'unk':2}
+    cid = len(meta.c2i)
     for sent in data:
         for w,p,l in sent:
             tags.add(p)
             for c in w:
-                if l == 'en':
-                    if not meta.ec2i.has_key(c):
-                        meta.ec2i[c] = ecid
-                        ecid += 1
-                elif l == 'hi':
-                    if not meta.hc2i.has_key(c):
-                        meta.hc2i[c] = hcid
-                        hcid += 1
-                else:
-                    sys.stderr.write('Language Error! \n')
-                    exit()
-    meta.n_chars_eng = len(meta.ec2i)
-    meta.n_chars_hin = len(meta.hc2i)
+                if not meta.c2i.has_key(c):
+                    meta.c2i[c] = cid
+                    cid += 1
+    meta.n_chars = len(meta.c2i)
     meta.n_tags = len(tags)
     meta.i2t = dict(enumerate(tags))
     meta.t2i = {t:i for i,t in meta.i2t.items()}
