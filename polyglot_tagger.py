@@ -79,8 +79,8 @@ class POSTagger():
         self.B2 = self.model.add_parameters(self.meta.n_tags)
 
         # word-level LSTMs
-        self.fwdRNN = dy.LSTMBuilder(1, self.meta.w_dim_eng*2+self.meta.lstm_char_dim*4, self.meta.lstm_word_dim, self.model) 
-        self.bwdRNN = dy.LSTMBuilder(1, self.meta.w_dim_eng*2+self.meta.lstm_char_dim*4, self.meta.lstm_word_dim, self.model)
+        self.fwdRNN = dy.LSTMBuilder(1, self.meta.w_dim_eng+self.meta.lstm_char_dim*2, self.meta.lstm_word_dim, self.model) 
+        self.bwdRNN = dy.LSTMBuilder(1, self.meta.w_dim_eng+self.meta.lstm_char_dim*2, self.meta.lstm_word_dim, self.model)
 
         # char-level LSTMs
         self.ecfwdRNN = dy.LSTMBuilder(1, self.meta.c_dim, self.meta.lstm_char_dim, self.model)
@@ -90,42 +90,25 @@ class POSTagger():
         if model:
             self.model.populate('%s.dy' %model)
 
-    def word_rep_eng(self, word):
-        if not self.eval and random.random() < 0.25:
-            return self.EWORDS_LOOKUP[0]
-        eidx = self.meta.ew2i.get(word, self.meta.ew2i.get(word.lower(), 0))
-        return self.EWORDS_LOOKUP[eidx]
-
-    def word_rep_hin(self, word):
-        word = trn.transform(word)
-        if not self.eval and random.random() < 0.25:
-            return self.HWORDS_LOOKUP[0]
-        hidx = self.meta.hw2i.get(word, self.meta.hw2i.get(word.lower(), 0))
-        return self.HWORDS_LOOKUP[hidx]
-
     def word_rep(self, word, lang='en'):
-        en_weight = hi_weight = 1
-        if self.eval is False:
-            en_weight = lang == 'en'
-            hi_weight = lang == 'hi'
-        elif self.eval is True and is_lang_dist(lang):
-            dist = get_lang_dist(lang)
-            en_weight = dist.get('en', 0)
-            hi_weight = dist.get('hi', 0)
-        return dy.concatenate([ hi_weight * self.word_rep_hin(word), en_weight * self.word_rep_eng(word)])
+        hidx = self.meta.hw2i.get(word, self.meta.hw2i.get(word.lower(), 0))
+        eidx = self.meta.ew2i.get(word, self.meta.ew2i.get(word.lower(), 0))
 
-    def char_rep_hin(self, w, f, b):
-        no_c_drop = False
-        if self.eval or random.random()<0.9:
-            no_c_drop = True
-        bos, eos, unk = self.meta.hc2i["bos"], self.meta.hc2i["eos"], self.meta.hc2i["unk"]
-        char_ids = [bos] + [self.meta.hc2i.get(c, unk) if no_c_drop else unk for c in w] + [eos]
-        char_embs = [self.HCHARS_LOOKUP[cid] for cid in char_ids]
-        fw_exps = f.transduce(char_embs)
-        bw_exps = b.transduce(reversed(char_embs))
-        return dy.concatenate([ fw_exps[-1], bw_exps[-1] ])
+        # if training, use language labels
+        if self.eval is False:
+            if lang == 'hi':
+                return self.HWORDS_LOOKUP[hidx]
+            else:
+                return self.EWORDS_LOOKUP[eidx]
+        # otherwise: if homonym, both oov, or unique english representation, return that; else return hindi
+        else:
+            if (hidx == 0 and eidx == 0) or (hidx != 0 and eidx != 0) or eidx != 0:
+                return self.EWORDS_LOOKUP[eidx]
+            else:
+                return self.HWORDS_LOOKUP[hidx]
+
     
-    def char_rep_eng(self, w, f, b):
+    def char_rep(self, w, f, b):
         no_c_drop = False
         if self.eval or random.random()<0.9:
             no_c_drop = True
@@ -136,18 +119,6 @@ class POSTagger():
         bw_exps = b.transduce(reversed(char_embs))
         return dy.concatenate([ fw_exps[-1], bw_exps[-1] ])
 
-    def char_rep(self, word, hf, hb, ef, eb, lang='en'):
-        hrep = self.char_rep_hin(word, hf, hb)
-        erep = self.char_rep_eng(word, ef, eb)
-        hi_weight = en_weight = 1
-        if self.eval is False:
-            en_weight = lang == 'en'
-            hi_weight = lang == 'hi'
-        elif self.eval is True and is_lang_dist(lang):
-            dist = get_lang_dist(lang)
-            en_weight = dist.get('en', 0)
-            hi_weight = dist.get('hi', 0)
-        return dy.concatenate([hi_weight * hrep, en_weight * erep])
 
     def enable_dropout(self):
         self.fwdRNN.set_dropout(0.3)
