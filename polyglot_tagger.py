@@ -13,9 +13,27 @@ from collections import Counter, defaultdict
 import dynet as dy
 import numpy as np
 from gensim.models.word2vec import KeyedVectors
+from indictrans import Transliterator
 
-hindi = english = oov = homonyms = 0
-homonyms_list = []
+trn = Transliterator(source='eng', target='hin', build_lookup=True)
+
+# deva_to_latn = dict()
+# latn_to_deva = dict()
+
+# translit_mapping = codecs.open('/Users/kelseyball/unsupervised-codemixing/data/emb/polyglot/translit_mapping.txt', mode='r', encoding='utf-8')
+# for line in translit_mapping:
+#     tokens = line.split()
+#     deva = tokens[0]
+#     latn = tokens[1:]
+#     deva_to_latn[deva] = latn 
+
+# for k,v in deva_to_latn.iteritems():
+#     for latn in v:
+#         latn_to_deva[latn].append(k)
+
+# hindi = english = oov = homonyms = 0
+# homonyms_list = []
+
 class Meta:
     def __init__(self):
         self.c_dim = 32  # character-rnn input dimension
@@ -50,8 +68,8 @@ class POSTagger():
         self.B2 = self.model.add_parameters(self.meta.n_tags)
 
         # word-level LSTMs
-        self.fwdRNN = dy.LSTMBuilder(1, self.meta.w_dim_eng+self.meta.lstm_char_dim*2, self.meta.lstm_word_dim, self.model) 
-        self.bwdRNN = dy.LSTMBuilder(1, self.meta.w_dim_eng+self.meta.lstm_char_dim*2, self.meta.lstm_word_dim, self.model)
+        self.fwdRNN = dy.LSTMBuilder(1, self.meta.w_dim_eng*2+self.meta.lstm_char_dim*4, self.meta.lstm_word_dim, self.model) 
+        self.bwdRNN = dy.LSTMBuilder(1, self.meta.w_dim_eng*2+self.meta.lstm_char_dim*4, self.meta.lstm_word_dim, self.model)
 
         # char-level LSTMs
         self.ecfwdRNN = dy.LSTMBuilder(1, self.meta.c_dim, self.meta.lstm_char_dim, self.model)
@@ -61,44 +79,25 @@ class POSTagger():
         if model:
             self.model.populate('%s.dy' %model)
 
-    def word_rep(self, word, lang='en', guess_language=None):
-        global homonyms, oov, hindi, english, homonyms_list
-        if not self.eval and random.random() < 0.25:
-            return self.HWORDS_LOOKUP[0] if lang=='hi' else self.EWORDS_LOOKUP[0]
-        hidx = self.meta.hw2i.get(word, self.meta.hw2i.get(word.lower(), 0))
-        hrep = self.HWORDS_LOOKUP[hidx]
+    def word_rep_english(self, word, test):
+        if not test and random.random() < 0.25:
+            return self.EWORDS_LOOKUP[0]
         eidx = self.meta.ew2i.get(word, self.meta.ew2i.get(word.lower(), 0))
-        erep = self.EWORDS_LOOKUP[eidx]
-        if guess_language is None:
-            if lang == 'hi': return hrep
-            elif lang == 'en': return erep
-        else:
-            # OOV for both embedding spaces, or present in both spaces --> pick either with equal probability
-            if (hidx == 0 and eidx == 0):
-                # print("both OOV: ", word)
-                oov += 1
-                # if guess_language == 'en':
-                #     return erep
-                # elif guess_language == 'hi':
-                #     return hrep
-                return erep
-            elif (hidx != 0 and eidx != 0):
-                # homonyms
-                homonyms += 1
-                homonyms_list.append((word, lang))
-                # if guess_language == 'en':
-                #     return erep
-                # elif guess_language == 'hi':
-                #     return hrep
-                return erep
-            elif hidx != 0:
-                hindi += 1
-                # print("found Hindi rep: ", word)
-                return hrep
-            elif eidx != 0:
-                english += 1
-                # print("found English rep: ", word)
-                return erep
+        return self.EWORDS_LOOKUP[eidx]
+
+    def word_rep_hindi(self, word, test):
+        word = trn.transform(word)
+        if not test and random.random() < 0.25:
+            return self.HWORDS_LOOKUP[0]
+        hidx = self.meta.hw2i.get(word, self.meta.hw2i.get(word.lower(), 0))
+        return self.HWORDS_LOOKUP[hidx]
+
+    def word_rep(self, word, lang='en', test=False):
+        en_weight = hi_weight = 1
+        # if test is False:
+        #     en_weight = lang == 'en'
+        #     hi_weight = lang == 'hi'
+        return dy.concatenate([ hi_weight * self.word_rep_hindi(word, test), en_weight * self.word_rep_english(word, test)])
 
     def char_rep_hin(self, w, f, b):
         no_c_drop = False
@@ -125,14 +124,11 @@ class POSTagger():
     def char_rep(self, word, hf, hb, ef, eb, lang='en', guess_language=None):
         hrep = self.char_rep_hin(word, hf, hb)
         erep = self.char_rep_eng(word, ef, eb)
-        if guess_language is None:
-            if lang == 'hi': return hrep
-            elif lang == 'en': return erep
-        else:
-            if guess_language == 'en':
-                return erep
-            elif guess_language == 'hi':
-                return hrep
+        hi_weight = en_weight = 1
+        # if test is False:
+        #     en_weight = lang == 'en'
+        #     hi_weight = lang == 'hi'
+        return dy.concatenate([hi_weight * hrep, en_weight * erep])
 
     def enable_dropout(self):
         self.fwdRNN.set_dropout(0.3)
@@ -152,7 +148,7 @@ class POSTagger():
         self.hcfwdRNN.disable_dropout()
         self.hcbwdRNN.disable_dropout()
 
-    def build_tagging_graph(self, words, ltags, use_ltags=True):
+    def build_tagging_graph(self, words, ltags, test=False):
         # parameters -> expressions
         self.w1 = dy.parameter(self.W1)
         self.b1 = dy.parameter(self.B1)
@@ -175,30 +171,14 @@ class POSTagger():
         self.ecf_init = self.ecfwdRNN.initial_state()
         self.ecb_init = self.ecbwdRNN.initial_state()
 
-        # If not using language labels, choose random language in the case of homonyms and OOV
-        if use_ltags is False:
-            wembs = []
-            cembs = []
-            for w,l in zip(words,ltags):
-                guess_language = None
-                if use_ltags is False:
-                    guess_language = 'en'
-                    if random.random() < 0.5:
-                        guess_language = 'hi'
-                wembs.append(self.word_rep(w,l,guess_language))
-                cembs.append(self.char_rep(w,self.hcf_init, self.hcb_init, self.ecf_init, self.ecb_init, l,guess_language))
-            xembs = [dy.concatenate([w, c]) for w,c in zip(wembs, cembs)]
-    
-        # Otherwise use language labels
-        else:
-            # get the word vectors. word_rep(...) returns a 128-dim vector expression for each word.
-            wembs = [self.word_rep(w, l, guess_language=None) for w,l in zip(words, ltags)]
-            #if not self.eval:
-            #    wembs = [dy.block_dropout(x, 0.25) for x in wembs]
-            cembs = [self.char_rep(w, self.hcf_init, self.hcb_init,
-                                   self.ecf_init, self.ecb_init, l, guess_language=None) for w,l in zip(words, ltags)]
-            xembs = [dy.concatenate([w, c]) for w,c in zip(wembs, cembs)]
-    
+        # get the word vectors. word_rep(...) returns a 128-dim vector expression for each word.
+        wembs = [self.word_rep(w, l, test) for w,l in zip(words, ltags)]
+        #if not self.eval:
+        #    wembs = [dy.block_dropout(x, 0.25) for x in wembs]
+        cembs = [self.char_rep(w, self.hcf_init, self.hcb_init,
+                               self.ecf_init, self.ecb_init, l, test) for w,l in zip(words, ltags)]
+        xembs = [dy.concatenate([w, c]) for w,c in zip(wembs, cembs)]
+
         # feed word vectors into biLSTM
         fw_exps = f_init.transduce(xembs)
         bw_exps = b_init.transduce(reversed(xembs))
@@ -214,19 +194,19 @@ class POSTagger():
             exps.append(xo)
         return exps
     
-    def sent_loss(self, words, tags, ltags):
+    def sent_loss(self, words, tags, ltags, test=False):
         self.eval = False
-        vecs = self.build_tagging_graph(words, ltags, use_ltags=True)
+        vecs = self.build_tagging_graph(words, ltags, test)
         for v,t in zip(vecs,tags):
             tid = self.meta.t2i[t]
             err = dy.pickneglogsoftmax(v, tid)
             self.loss.append(err)
     
-    def tag_sent(self, words, ltags, use_ltags):
+    def tag_sent(self, words, ltags, test=True):
         self.eval = True
         dy.renew_cg()
         # If using dev file with language predictions or gold labels, use_ltags is true, otherwise use lookup/random backoff 
-        vecs = self.build_tagging_graph(words, ltags, use_ltags)
+        vecs = self.build_tagging_graph(words, ltags, test)
         vecs = [dy.softmax(v) for v in vecs]
         probs = [v.npvalue() for v in vecs]
         tags = []
@@ -274,14 +254,14 @@ def read(fname, lang=None):
     return data
 
 def eval(dev, ofp=None):
-    global hindi, english, oov, homonyms, homonyms_list
-    homonyms_list = []
-    hindi = english = oov = homonyms = 0
+    # global hindi, english, oov, homonyms, homonyms_list
+    # homonyms_list = []
+    # hindi = english = oov = homonyms = 0
     good_sent = bad_sent = good = bad = 0.0
     gall, pall = [], []
     for sent in dev:
         words, golds, ltags = zip(*sent)
-        tags = [t for w,t in tagger.tag_sent(words, ltags, args.use_ltags)]
+        tags = [t for w,t in tagger.tag_sent(words, ltags, test=True)]
         #pall.extend(tags)
         if list(tags) == list(golds): good_sent += 1
         else: bad_sent += 1
@@ -290,9 +270,9 @@ def eval(dev, ofp=None):
             else: bad += 1
     #print(cr(gall, pall, digits=4))
     print(good/(good+bad), good_sent/(good_sent+bad_sent))
-    print("oov: {}, homonyms: {}, english: {}, hindi: {}".format(oov, homonyms, english, hindi))
-    with io.open('homonyms', 'w', encoding='utf-8') as h_out:
-        h_out.write('\n'.join(['\t'.join(h) for h in homonyms_list]))
+    # print("oov: {}, homonyms: {}, english: {}, hindi: {}".format(oov, homonyms, english, hindi))
+    # with io.open('homonyms', 'w', encoding='utf-8') as h_out:
+    #     h_out.write('\n'.join(['\t'.join(h) for h in homonyms_list]))
     return good/(good+bad)
 
 def train_tagger(train):
