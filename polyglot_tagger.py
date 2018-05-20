@@ -34,6 +34,17 @@ trn = Transliterator(source='eng', target='hin', build_lookup=True)
 # hindi = english = oov = homonyms = 0
 # homonyms_list = []
 
+def is_lang_dist(dist_string):
+    return dist_string.contains(':')
+
+def get_lang_dist(dist_string):
+    dist = dict()
+    pairs = dist_string.split(',')
+    for p in pairs:
+        lang, prob = p.split(':')
+        dist[lang] = prob    
+    return dist
+
 class Meta:
     def __init__(self):
         self.c_dim = 32  # character-rnn input dimension
@@ -79,25 +90,29 @@ class POSTagger():
         if model:
             self.model.populate('%s.dy' %model)
 
-    def word_rep_english(self, word, test):
-        if not test and random.random() < 0.25:
+    def word_rep_eng(self, word):
+        if not self.eval and random.random() < 0.25:
             return self.EWORDS_LOOKUP[0]
         eidx = self.meta.ew2i.get(word, self.meta.ew2i.get(word.lower(), 0))
         return self.EWORDS_LOOKUP[eidx]
 
-    def word_rep_hindi(self, word, test):
+    def word_rep_hin(self, word):
         word = trn.transform(word)
-        if not test and random.random() < 0.25:
+        if not self.eval and random.random() < 0.25:
             return self.HWORDS_LOOKUP[0]
         hidx = self.meta.hw2i.get(word, self.meta.hw2i.get(word.lower(), 0))
         return self.HWORDS_LOOKUP[hidx]
 
-    def word_rep(self, word, lang='en', test=False):
+    def word_rep(self, word, lang='en'):
         en_weight = hi_weight = 1
-        # if test is False:
-        #     en_weight = lang == 'en'
-        #     hi_weight = lang == 'hi'
-        return dy.concatenate([ hi_weight * self.word_rep_hindi(word, test), en_weight * self.word_rep_english(word, test)])
+        if self.eval is False:
+            en_weight = lang == 'en'
+            hi_weight = lang == 'hi'
+        elif self.eval is True and is_lang_dist(lang):
+            dist = get_lang_dist(lang)
+            en_weight = dist.get('en', 0)
+            hi_weight = dist.get('hi', 0)
+        return dy.concatenate([ hi_weight * self.word_rep_hin(word), en_weight * self.word_rep_eng(word)])
 
     def char_rep_hin(self, w, f, b):
         no_c_drop = False
@@ -121,13 +136,17 @@ class POSTagger():
         bw_exps = b.transduce(reversed(char_embs))
         return dy.concatenate([ fw_exps[-1], bw_exps[-1] ])
 
-    def char_rep(self, word, hf, hb, ef, eb, lang='en', guess_language=None):
+    def char_rep(self, word, hf, hb, ef, eb, lang='en'):
         hrep = self.char_rep_hin(word, hf, hb)
         erep = self.char_rep_eng(word, ef, eb)
         hi_weight = en_weight = 1
-        # if test is False:
-        #     en_weight = lang == 'en'
-        #     hi_weight = lang == 'hi'
+        if self.eval is False:
+            en_weight = lang == 'en'
+            hi_weight = lang == 'hi'
+        elif self.eval is True and is_lang_dist(lang):
+            dist = get_lang_dist(lang)
+            en_weight = dist.get('en', 0)
+            hi_weight = dist.get('hi', 0)
         return dy.concatenate([hi_weight * hrep, en_weight * erep])
 
     def enable_dropout(self):
@@ -148,7 +167,7 @@ class POSTagger():
         self.hcfwdRNN.disable_dropout()
         self.hcbwdRNN.disable_dropout()
 
-    def build_tagging_graph(self, words, ltags, test=False):
+    def build_tagging_graph(self, words, ltags):
         # parameters -> expressions
         self.w1 = dy.parameter(self.W1)
         self.b1 = dy.parameter(self.B1)
@@ -172,11 +191,11 @@ class POSTagger():
         self.ecb_init = self.ecbwdRNN.initial_state()
 
         # get the word vectors. word_rep(...) returns a 128-dim vector expression for each word.
-        wembs = [self.word_rep(w, l, test) for w,l in zip(words, ltags)]
+        wembs = [self.word_rep(w, l) for w,l in zip(words, ltags)]
         #if not self.eval:
         #    wembs = [dy.block_dropout(x, 0.25) for x in wembs]
         cembs = [self.char_rep(w, self.hcf_init, self.hcb_init,
-                               self.ecf_init, self.ecb_init, l, test) for w,l in zip(words, ltags)]
+                               self.ecf_init, self.ecb_init, l) for w,l in zip(words, ltags)]
         xembs = [dy.concatenate([w, c]) for w,c in zip(wembs, cembs)]
 
         # feed word vectors into biLSTM
@@ -194,19 +213,19 @@ class POSTagger():
             exps.append(xo)
         return exps
     
-    def sent_loss(self, words, tags, ltags, test=False):
+    def sent_loss(self, words, tags, ltags):
         self.eval = False
-        vecs = self.build_tagging_graph(words, ltags, test)
+        vecs = self.build_tagging_graph(words, ltags)
         for v,t in zip(vecs,tags):
             tid = self.meta.t2i[t]
             err = dy.pickneglogsoftmax(v, tid)
             self.loss.append(err)
     
-    def tag_sent(self, words, ltags, test=True):
+    def tag_sent(self, words, ltags):
         self.eval = True
         dy.renew_cg()
         # If using dev file with language predictions or gold labels, use_ltags is true, otherwise use lookup/random backoff 
-        vecs = self.build_tagging_graph(words, ltags, test)
+        vecs = self.build_tagging_graph(words, ltags)
         vecs = [dy.softmax(v) for v in vecs]
         probs = [v.npvalue() for v in vecs]
         tags = []
@@ -261,7 +280,7 @@ def eval(dev, ofp=None):
     gall, pall = [], []
     for sent in dev:
         words, golds, ltags = zip(*sent)
-        tags = [t for w,t in tagger.tag_sent(words, ltags, test=True)]
+        tags = [t for w,t in tagger.tag_sent(words, ltags)]
         #pall.extend(tags)
         if list(tags) == list(golds): good_sent += 1
         else: bad_sent += 1
