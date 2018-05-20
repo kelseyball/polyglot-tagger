@@ -14,6 +14,8 @@ import dynet as dy
 import numpy as np
 from gensim.models.word2vec import KeyedVectors
 
+hindi = english = oov = homonyms = 0
+homonyms_list = []
 class Meta:
     def __init__(self):
         self.c_dim = 32  # character-rnn input dimension
@@ -60,6 +62,7 @@ class POSTagger():
             self.model.populate('%s.dy' %model)
 
     def word_rep(self, word, lang='en', guess_language=None):
+        global homonyms, oov, hindi, english, homonyms_list
         if not self.eval and random.random() < 0.25:
             return self.HWORDS_LOOKUP[0] if lang=='hi' else self.EWORDS_LOOKUP[0]
         hidx = self.meta.hw2i.get(word, self.meta.hw2i.get(word.lower(), 0))
@@ -71,16 +74,29 @@ class POSTagger():
             elif lang == 'en': return erep
         else:
             # OOV for both embedding spaces, or present in both spaces --> pick either with equal probability
-            if (hidx == 0 and eidx == 0) or (hidx != 0 and eidx != 0):
+            if (hidx == 0 and eidx == 0):
                 # print("both OOV: ", word)
-                if guess_language == 'en':
-                    return erep
-                elif guess_language == 'hi':
-                    return hrep
+                oov += 1
+                # if guess_language == 'en':
+                #     return erep
+                # elif guess_language == 'hi':
+                #     return hrep
+                return erep
+            elif (hidx != 0 and eidx != 0):
+                # homonyms
+                homonyms += 1
+                homonyms_list.append((word, lang))
+                # if guess_language == 'en':
+                #     return erep
+                # elif guess_language == 'hi':
+                #     return hrep
+                return erep
             elif hidx != 0:
+                hindi += 1
                 # print("found Hindi rep: ", word)
                 return hrep
             elif eidx != 0:
+                english += 1
                 # print("found English rep: ", word)
                 return erep
 
@@ -258,6 +274,9 @@ def read(fname, lang=None):
     return data
 
 def eval(dev, ofp=None):
+    global hindi, english, oov, homonyms, homonyms_list
+    homonyms_list = []
+    hindi = english = oov = homonyms = 0
     good_sent = bad_sent = good = bad = 0.0
     gall, pall = [], []
     for sent in dev:
@@ -271,6 +290,9 @@ def eval(dev, ofp=None):
             else: bad += 1
     #print(cr(gall, pall, digits=4))
     print(good/(good+bad), good_sent/(good_sent+bad_sent))
+    print("oov: {}, homonyms: {}, english: {}, hindi: {}".format(oov, homonyms, english, hindi))
+    with io.open('homonyms', 'w', encoding='utf-8') as h_out:
+        h_out.write('\n'.join(['\t'.join(h) for h in homonyms_list]))
     return good/(good+bad)
 
 def train_tagger(train):
