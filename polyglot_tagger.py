@@ -35,7 +35,7 @@ trn = Transliterator(source='eng', target='hin', build_lookup=True)
 # homonyms_list = []
 
 def is_lang_dist(dist_string):
-    return dist_string.contains(':')
+    return ":" in dist_string
 
 def get_lang_dist(dist_string):
     dist = dict()
