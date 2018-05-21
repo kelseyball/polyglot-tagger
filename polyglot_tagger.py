@@ -97,6 +97,15 @@ class POSTagger():
                 return self.HWORDS_LOOKUP[hidx]
             else:
                 return self.EWORDS_LOOKUP[eidx]
+
+        # if evaluating using unsup language distribution
+        elif self.eval is True and is_lang_dist(lang):
+            dist = get_lang_dist(lang)
+            en_weight = dist.get('en', 0)
+            hi_weight = dist.get('hi', 0)
+            if hi_weight > en_weight: return self.HWORDS_LOOKUP[hidx]
+            else: return self.EWORDS_LOOKUP[eidx]
+
         # otherwise: if homonym, both oov, or unique english representation, return that; else return hindi
         else:
             if (hidx == 0 and eidx == 0) or (hidx != 0 and eidx != 0) or eidx != 0:
