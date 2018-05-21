@@ -28,7 +28,9 @@ for line in translit_mapping:
     latn_to_deva[latn] = deva
 
 def detransliterate(word):
-    return random.choice(latn_to_deva[word])
+    if word in latn_to_deva:
+        return random.choice(latn_to_deva[word])
+    return trn.transform(word)
 
 # hindi = english = oov = homonyms = 0
 # homonyms_list = []
@@ -96,8 +98,8 @@ class POSTagger():
         return self.EWORDS_LOOKUP[eidx]
 
     def word_rep_hin(self, word):
-        word = trn.transform(word)
-        # word = detransliterate(word)
+        # word = trn.transform(word)
+        word = detransliterate(word)
         if not self.eval and random.random() < 0.25:
             return self.HWORDS_LOOKUP[0]
         hidx = self.meta.hw2i.get(word, self.meta.hw2i.get(word.lower(), 0))
@@ -115,8 +117,8 @@ class POSTagger():
         return dy.concatenate([ hi_weight * self.word_rep_hin(word), en_weight * self.word_rep_eng(word)])
 
     def char_rep_hin(self, w, f, b):
-        word = trn.transform(word)
-        # word = detransliterate(word)
+        # w= trn.transform(w)
+        w = detransliterate(w)
         no_c_drop = False
         if self.eval or random.random()<0.9:
             no_c_drop = True
@@ -192,8 +194,8 @@ class POSTagger():
         self.ecf_init = self.ecfwdRNN.initial_state()
         self.ecb_init = self.ecbwdRNN.initial_state()
 
-
-        detransliterated_words = [detransliterate(word) for word in words]
+        # if self.eval:
+        #     words = [detransliterate(word) for word in words]
 
         # get the word vectors. word_rep(...) returns a 128-dim vector expression for each word.
         wembs = [self.word_rep(w, l) for w,l in zip(words, ltags)]
