@@ -112,8 +112,8 @@ class POSTagger():
         return self.EWORDS_LOOKUP[eidx]
 
     def word_rep_hin(self, word):
-        # word = trn.transform(word)
-        word = detransliterate(word)
+        word = trn.transform(word)
+        # word = detransliterate(word)
         if not self.eval and random.random() < 0.25:
             return self.HWORDS_LOOKUP[0]
         hidx = self.meta.hw2i.get(word, self.meta.hw2i.get(word.lower(), 0))
@@ -121,9 +121,9 @@ class POSTagger():
 
     def word_rep(self, word, lang='en'):
         en_weight = hi_weight = 1
-        # if self.eval is False:
-        #     en_weight = lang == 'en'
-        #     hi_weight = lang == 'hi'
+        if self.eval is False:
+            en_weight = lang == 'en'
+            hi_weight = lang == 'hi'
         if self.eval is True and is_lang_dist(lang):
             dist = get_lang_dist(lang)
             en_weight = dist.get('en', 0)
@@ -156,9 +156,9 @@ class POSTagger():
         hrep = self.char_rep_hin(word, hf, hb)
         erep = self.char_rep_eng(word, ef, eb)
         hi_weight = en_weight = 1
-        # if self.eval is False:
-        #     en_weight = lang == 'en'
-        #     hi_weight = lang == 'hi'
+        if self.eval is False:
+            en_weight = lang == 'en'
+            hi_weight = lang == 'hi'
         if self.eval is True and is_lang_dist(lang):
             dist = get_lang_dist(lang)
             en_weight = dist.get('en', 0)
