@@ -32,7 +32,7 @@ def detransliterate(word):
         return random.choice(latn_to_deva[word])
     return trn.transform(word)
 
-# hindi = english = oov = homonyms = 0
+hindi = english = oov = homonyms = 0
 # homonyms_list = []
 
 def is_lang_dist(dist_string):
@@ -98,11 +98,15 @@ class POSTagger():
         return self.EWORDS_LOOKUP[eidx]
 
     def word_rep_hin(self, word):
-        # word = trn.transform(word)
-        word = detransliterate(word)
+        global oov
+        if self.eval:
+            word = detransliterate(word)
+        else:
+            word = trn.transform(word)
         if not self.eval and random.random() < 0.25:
             return self.HWORDS_LOOKUP[0]
         hidx = self.meta.hw2i.get(word, self.meta.hw2i.get(word.lower(), 0))
+        if hidx == 0: oov += 1
         return self.HWORDS_LOOKUP[hidx]
 
     def word_rep(self, word, lang='en'):
@@ -280,9 +284,9 @@ def read(fname, lang=None):
     return data
 
 def eval(dev, ofp=None):
-    # global hindi, english, oov, homonyms, homonyms_list
+    global hindi, english, oov, homonyms, homonyms_list
     # homonyms_list = []
-    # hindi = english = oov = homonyms = 0
+    hindi = english = oov = homonyms = 0
     good_sent = bad_sent = good = bad = 0.0
     gall, pall = [], []
     for sent in dev:
@@ -296,7 +300,7 @@ def eval(dev, ofp=None):
             else: bad += 1
     #print(cr(gall, pall, digits=4))
     print(good/(good+bad), good_sent/(good_sent+bad_sent))
-    # print("oov: {}, homonyms: {}, english: {}, hindi: {}".format(oov, homonyms, english, hindi))
+    print("oov: {}, homonyms: {}, english: {}, hindi: {}".format(oov, homonyms, english, hindi))
     # with io.open('homonyms', 'w', encoding='utf-8') as h_out:
     #     h_out.write('\n'.join(['\t'.join(h) for h in homonyms_list]))
     return good/(good+bad)
