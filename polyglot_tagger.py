@@ -18,33 +18,17 @@ from indictrans import Transliterator
 trn = Transliterator(source='eng', target='hin', build_lookup=True)
 r2i = Transliterator(source='eng', target='hin', decode='beamsearch')
 
-deva_to_latn = dict()
 latn_to_deva = dict()
 
-translit_mapping = io.open('/Users/kelseyball/unsupervised-codemixing/data/emb/polyglot/translit_mapping.txt', mode='r', encoding='utf-8')
+translit_mapping = io.open('/Users/kelseyball/UD_Hindi/UD_Hindi_English/TWEETS-dev-v2-detransliterations', mode='r', encoding='utf-8')
 for line in translit_mapping:
     tokens = line.split()
-    deva = tokens[0][3:]
-    latn = tokens[1:]
-    deva_to_latn[deva] = latn 
-
-for k,v in deva_to_latn.iteritems():
-    for latn in v:
-        # deva = latn_to_deva.get(latn, [])
-        # deva.append(k)
-        latn_to_deva[latn] = deva
+    latn = tokens[0]
+    deva = tokens[1:]
+    latn_to_deva[latn] = deva
 
 def detransliterate(word):
-    # target = latn_to_deva.get(latn, None)
-    # if target is None:
-    #     target = trn.transform(word)
-
-    # get top 5 transliterations, return first in embeddings lookup or else return best
-    translits = r2i.transform(word, k_best=5)
-    for t in translits:
-        if t in meta.hw2i:
-            return t
-    return translits[0]
+    return random.choice(latn_to_deva[word])
 
 # hindi = english = oov = homonyms = 0
 # homonyms_list = []
@@ -131,6 +115,8 @@ class POSTagger():
         return dy.concatenate([ hi_weight * self.word_rep_hin(word), en_weight * self.word_rep_eng(word)])
 
     def char_rep_hin(self, w, f, b):
+        word = trn.transform(word)
+        # word = detransliterate(word)
         no_c_drop = False
         if self.eval or random.random()<0.9:
             no_c_drop = True
@@ -205,6 +191,9 @@ class POSTagger():
     
         self.ecf_init = self.ecfwdRNN.initial_state()
         self.ecb_init = self.ecbwdRNN.initial_state()
+
+
+        detransliterated_words = [detransliterate(word) for word in words]
 
         # get the word vectors. word_rep(...) returns a 128-dim vector expression for each word.
         wembs = [self.word_rep(w, l) for w,l in zip(words, ltags)]
