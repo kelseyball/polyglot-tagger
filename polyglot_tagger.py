@@ -125,6 +125,7 @@ class POSTagger():
         return dy.concatenate([ hi_weight * self.word_rep_hin(word), en_weight * self.word_rep_eng(word)])
 
     def char_rep_hin(self, w, f, b):
+        w = trn.transform(w)
         no_c_drop = False
         if self.eval or random.random()<0.9:
             no_c_drop = True
