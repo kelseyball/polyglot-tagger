@@ -121,7 +121,7 @@ class POSTagger():
 
     def word_rep(self, word, lang='en'):
         hi_weight = lang == 'hi'
-        en_weight = 1 - hi_weight
+        en_weight = lang == 'en'
         return dy.concatenate([ hi_weight * self.word_rep_hin(word), en_weight * self.word_rep_eng(word)])
 
     def char_rep_hin(self, w, f, b):
@@ -151,7 +151,7 @@ class POSTagger():
         hrep = self.char_rep_hin(word, hf, hb)
         erep = self.char_rep_eng(word, ef, eb)
         hi_weight = lang == 'hi'
-        en_weight = 1 - hi_weight
+        en_weight = lang == 'en'
         return dy.concatenate([hi_weight * hrep, en_weight * erep])
 
     def enable_dropout(self):
