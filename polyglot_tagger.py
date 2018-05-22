@@ -27,9 +27,20 @@ for line in translit_mapping:
     deva = tokens[1:]
     latn_to_deva[latn] = deva
 
+# oov = 0
+# cm = io.open('/Users/kelseyball/UD_Hindi/UD_Hindi_English/TWEETS-dev-v2.conll', mode='r', encoding='utf-8')
+# for line in cm:
+# 	if not line.strip(): continue
+# 	if line.split()[1] not in latn_to_deva:
+# 		oov += 1
+
+# print ("not in latn_to_deva: {}".format(oov))
+
+
 def detransliterate(word):
     if word in latn_to_deva:
-        return random.choice(latn_to_deva[word])
+        # return random.choice(latn_to_deva[word]) # randomly sample from transliterations
+        return latn_to_deva[word][0] # first best transliteration
     return trn.transform(word)
 
 hindi = english = oov = homonyms = 0
@@ -99,14 +110,14 @@ class POSTagger():
 
     def word_rep_hin(self, word):
         global oov
-        if self.eval:
-            word = detransliterate(word)
-        else:
-            word = trn.transform(word)
+        target = detransliterate(word)
+        # word = trn.transform(word)
         if not self.eval and random.random() < 0.25:
             return self.HWORDS_LOOKUP[0]
-        hidx = self.meta.hw2i.get(word, self.meta.hw2i.get(word.lower(), 0))
-        if hidx == 0: oov += 1
+        hidx = self.meta.hw2i.get(target, self.meta.hw2i.get(target.lower(), 0))
+        if hidx == 0 and self.eval is True: 
+        	oov += 1
+        	# print(word)
         return self.HWORDS_LOOKUP[hidx]
 
     def word_rep(self, word, lang='en'):
@@ -122,7 +133,7 @@ class POSTagger():
 
     def char_rep_hin(self, w, f, b):
         # w= trn.transform(w)
-        w = detransliterate(w)
+    	w = detransliterate(w)
         no_c_drop = False
         if self.eval or random.random()<0.9:
             no_c_drop = True
