@@ -91,28 +91,11 @@ class POSTagger():
         hidx = self.meta.hw2i.get(word, self.meta.hw2i.get(word.lower(), 0))
         eidx = self.meta.ew2i.get(word, self.meta.ew2i.get(word.lower(), 0))
 
-        # if training, use language labels
-        if self.eval is False:
-            if lang == 'hi':
-                return self.HWORDS_LOOKUP[hidx]
-            else:
-                return self.EWORDS_LOOKUP[eidx]
-
-        # if evaluating using unsup language distribution
-        elif self.eval is True and is_lang_dist(lang):
-            dist = get_lang_dist(lang)
-            en_weight = dist.get('en', 0)
-            hi_weight = dist.get('hi', 0)
-            if hi_weight > en_weight: return self.HWORDS_LOOKUP[hidx]
-            else: return self.EWORDS_LOOKUP[eidx]
-
-        # otherwise: if homonym, both oov, or unique english representation, return that; else return hindi
+        # always use gold language labels
+        if lang == 'hi':
+            return self.HWORDS_LOOKUP[hidx]
         else:
-            if (hidx == 0 and eidx == 0) or (hidx != 0 and eidx != 0) or eidx != 0:
-                return self.EWORDS_LOOKUP[eidx]
-            else:
-                return self.HWORDS_LOOKUP[hidx]
-
+            return self.EWORDS_LOOKUP[eidx]
     
     def char_rep(self, w, f, b):
         no_c_drop = False
