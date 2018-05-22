@@ -127,8 +127,8 @@ class POSTagger():
             hi_weight = lang == 'hi'
         if self.eval is True and is_lang_dist(lang):
             dist = get_lang_dist(lang)
-            en_weight = dist.get('en', 0)
-            hi_weight = dist.get('hi', 0)
+            hi_weight = dist.get('hi', 0) > dist.get('en', 0)
+            en_weight = 1 - hi_weight
         return dy.concatenate([ hi_weight * self.word_rep_hin(word), en_weight * self.word_rep_eng(word)])
 
     def char_rep_hin(self, w, f, b):
@@ -164,8 +164,8 @@ class POSTagger():
             hi_weight = lang == 'hi'
         if self.eval is True and is_lang_dist(lang):
             dist = get_lang_dist(lang)
-            en_weight = dist.get('en', 0)
-            hi_weight = dist.get('hi', 0)
+            hi_weight = dist.get('hi', 0) > dist.get('en', 0)
+            en_weight = 1 - hi_weight
         return dy.concatenate([hi_weight * hrep, en_weight * erep])
 
     def enable_dropout(self):
